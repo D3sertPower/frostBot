@@ -2,7 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { getReply } = require('../src/message-handler');
+const { getReply, commandMap } = require('../src/message-handler');
+
+test('exposes a commandMap without circular dependency', () => {
+  assert.ok(commandMap instanceof Map);
+  assert.ok(commandMap.has('!ping'));
+  assert.equal(getReply('!ping'), 'Pong!');
+});
 
 test('responde ao comando !hello', () => {
   assert.equal(getReply('!hello'), 'Hello!');

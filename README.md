@@ -1,7 +1,4 @@
-# Steam Hello Bot
-
-Bot mínimo em JavaScript/Node.js que entra em uma conta Steam e responde
-`Hello!` quando um amigo envia exatamente `!hello` por mensagem privada.
+# frostBot - Stay frosty! Steam P2P trading made safe and easy.
 
 ## Por que JavaScript?
 

@@ -4,8 +4,8 @@ require('dotenv').config({ quiet: true });
 
 const path = require('node:path');
 const SteamUser = require('steam-user');
-const { getReply } = require('./message-handler');
-
+const { getReply, COMMANDS } = require('./message-handler');
+const { updateInventory } = require('./commands/inv')
 const { STEAM_ACCOUNT_NAME, STEAM_PASSWORD } = process.env;
 
 if (!STEAM_ACCOUNT_NAME || !STEAM_PASSWORD) {
@@ -23,9 +23,41 @@ const client = new SteamUser({
 client.on('loggedOn', () => {
   console.log(`Conectado à Steam como ${client.steamID.getSteamID64()}.`);
   client.setPersona(SteamUser.EPersonaState.Online);
+  client.gamesPlayed('How may FructoseIQ help you today?');
 });
 
-client.chat.on('friendMessage', async (incoming) => {
+// TODO: Ciclo de mensagens no playing da Steam - Prioridade: Baixa
+client.on('friendRelationship',
+  async (steamID, relationship, previousRelationship) => {
+    try {
+      if (relationship === SteamUser.EFriendRelationship.RequestRecipient) {
+        console.log(`Pedido recebido de ${steamID.getSteamID64()}`);
+
+        await client.addFriend(steamID);
+        return;
+      }
+
+      if (
+        relationship === SteamUser.EFriendRelationship.Friend &&
+        previousRelationship === SteamUser.EFriendRelationship.RequestRecipient
+      ) {
+        await client.chat.sendFriendMessage(
+          steamID,
+          'Welcome! Do you know how to use this boat? Send !help for the full list of commands.'
+        );
+
+        console.log(`Mensagem de boas-vindas enviada para ${steamID.getSteamID64()}`);
+      }
+    } catch (error) {
+      console.error(
+        `Não foi possível aceitar ou responder ${steamID.getSteamID64()}:`,
+        error.message
+      );
+    }
+  }
+);
+
+client.chat.on('friendMessage', async (incoming) => { // incoming é o evento
   const friendId = incoming.steamid_friend;
   const friendId64 = friendId.getSteamID64();
 
@@ -33,12 +65,16 @@ client.chat.on('friendMessage', async (incoming) => {
   // notificações não lidas na conta do bot.
   client.chat.ackFriendMessage(friendId, incoming.server_timestamp);
 
-  const reply = getReply(incoming.message_no_bbcode ?? incoming.message);
+  const reply = getReply(incoming.message_no_bbcode ?? incoming.message, friendId64);
+  // tentamos pegar a mensagem sem formatação se não for possível
+  // pegamos a imagem com formatação mesmo
   if (!reply) {
     return;
-  }
+  } 
+  // getReply está no message-handler.js
 
-  console.log(`Comando !hello recebido de ${friendId64}.`);
+  // este bloco de código só executa se um comando for detectado
+  console.log(`Comando ${incoming.message_no_bbcode} recebido de ${friendId64}.`);
 
   try {
     await client.chat.sendFriendMessage(friendId, reply);
@@ -72,5 +108,5 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 client.logOn({
   accountName: STEAM_ACCOUNT_NAME,
   password: STEAM_PASSWORD,
-  machineName: 'steam-hello-bot',
+  machineName: 'frostBot',
 });
