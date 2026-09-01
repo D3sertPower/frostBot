@@ -1,6 +1,7 @@
 const INVENTORY = new Map([
     ['76561198874586215', ['The Frosty Ban Hammer', 'Empty Water Bottle']]
 ])
+const { getCurrentInteraction } = require('../interactions');
 // TODO: O INVENTÁRIO É CARREGADO DE UM BANCO DE DADOS REAL
 function updateInventory(steamId, item=[], alreadyExists=false) {
     /**Função para criar/atualizar um inventário
@@ -27,6 +28,12 @@ function updateInventory(steamId, item=[], alreadyExists=false) {
 
 function spyInventory(steamId, isSelf=false) {
     var inv = INVENTORY.get(steamId)
+    const returnType = getCurrentInteraction()?.metadata?.returnType;
+
+    if (returnType === 'raw') {
+        return inv ? [...inv] : [];
+    }
+
     var invMessage = "Inventory: "
     if (isSelf) {invMessage = "Your inventory: "}
     if (inv != undefined) {
@@ -51,11 +58,12 @@ module.exports = {
     }
     else {
     // Pequena gambiarra porque não é possível usar o método at direto em arguments:
-    hackArray = Array.from(arguments)
+    const hackArray = Array.from(arguments)
     var friendSteamID = hackArray.at(-1)
     var steamID = friendSteamID
     return spyInventory(steamID, true)
     }
   },
-  updateInventory
+  updateInventory,
+  spyInventory
 }

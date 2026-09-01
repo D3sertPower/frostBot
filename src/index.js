@@ -65,7 +65,10 @@ client.chat.on('friendMessage', async (incoming) => { // incoming é o evento
   // notificações não lidas na conta do bot.
   client.chat.ackFriendMessage(friendId, incoming.server_timestamp);
 
-  const reply = getReply(incoming.message_no_bbcode ?? incoming.message, friendId64);
+  const reply = await getReply(
+    incoming.message_no_bbcode ?? incoming.message,
+    friendId64,
+  );
   // tentamos pegar a mensagem sem formatação se não for possível
   // pegamos a imagem com formatação mesmo
   if (!reply) {

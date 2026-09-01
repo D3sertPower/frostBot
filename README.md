@@ -1,5 +1,43 @@
 # frostBot - Stay frosty! Steam P2P trading made safe and easy.
 
+## Interações entre comandos
+
+`src/interactions.js` é a camada responsável por executar comandos. Um comando
+pode chamar outro sem importar o `message-handler` ou o `index`:
+
+```javascript
+const { invokeCommand } = require('../interactions');
+
+async function run(steamID) {
+  const result = await invokeCommand('inventory', [steamID], {
+    mode: 'result',
+  });
+
+  if (!result.ok) {
+    return 'Could not read the inventory.';
+  }
+
+  return result.value;
+}
+```
+
+O modo padrão retorna diretamente o valor do comando. `mode: 'result'` retorna
+um envelope com `ok`, `command`, `value`, `metadata` e `stack`. A camada também
+aceita aliases, suporta comandos assíncronos e bloqueia recursão circular.
+
+### Criar uma oferta
+
+O comando `sendoffer` chama `inventory` internamente em modo bruto, verifica se
+o item pertence ao remetente e cria uma transação identificada por UUID:
+
+```text
+!sendoffer 76561198000000000 The Frosty Ban Hammer
+```
+
+As ofertas criadas ficam temporariamente no `Map` `ACTIVE_OFFERS`. Essa
+persistência em memória deve ser substituída por um banco de dados antes de usar
+o bot em produção.
+
 ## Por que JavaScript?
 
 O pacote `steam-user` implementa o protocolo de cliente da Steam, mantém a
