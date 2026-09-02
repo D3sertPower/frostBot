@@ -1,3 +1,5 @@
+const { pre } = require('../chat-format');
+
 module.exports = {
   name: 'help',
   aliases: ['h', 'ajuda'],
@@ -6,14 +8,25 @@ module.exports = {
   run() {
     const { COMMANDS } = require('../message-handler');
 
-    let message = 'Here is the list with all commands:\n';
+    const lines = [
+      '📚 FROSTBOAT COMMAND DECK ❄️',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    ];
 
     for (const command of COMMANDS.values()) {
-      message += `\n${command.name}:\n`;
-      message += `aliases: ${command.aliases.join(', ')}\n`;
-      message += `${command.description}\n`;
+      const usage = command.args?.length
+        ? `!${command.name} ${command.args.join(' ')}`
+        : `!${command.name}`;
+
+      lines.push(
+        '',
+        `🔹 ${usage}`,
+        `   🔁 Aliases: ${command.aliases.map((alias) => `!${alias}`).join(', ') || 'none'}`,
+        `   💬 ${command.description}`,
+      );
     }
 
-    return message;
+    lines.push('', '💡 Type any command exactly as shown above.');
+    return pre(lines);
   }
 };

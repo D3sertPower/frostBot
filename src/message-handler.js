@@ -65,6 +65,19 @@ async function getReply(text, friendId64) {
   if (typeof text !== 'string') {
     return null;
   }
+
+  if (!text.trim().startsWith(PREFIX) && friendId64) {
+    for (const command of COMMANDS.values()) {
+      if (
+        typeof command.hasPending === 'function' &&
+        typeof command.continue === 'function' &&
+        command.hasPending(friendId64)
+      ) {
+        return command.continue(text, friendId64);
+      }
+    }
+  }
+
   return handleCommand(text, friendId64);
 }
 

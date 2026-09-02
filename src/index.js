@@ -4,8 +4,14 @@ require('dotenv').config({ quiet: true });
 
 const path = require('node:path');
 const SteamUser = require('steam-user');
+const { quote } = require('./chat-format');
 const { getReply, COMMANDS } = require('./message-handler');
-const { updateInventory } = require('./commands/inv')
+const {
+  configureSteamClient: configureInventory,
+  updateInventory,
+} = require('./commands/inv')
+const { configureSteamClient: configureDeposit } = require('./commands/deposit');
+const { configureSteamClient: configureSendOffer } = require('./commands/sendoffer');
 const { STEAM_ACCOUNT_NAME, STEAM_PASSWORD } = process.env;
 
 if (!STEAM_ACCOUNT_NAME || !STEAM_PASSWORD) {
@@ -20,13 +26,16 @@ const client = new SteamUser({
   dataDirectory: path.join(__dirname, '..', 'data'),
 });
 
+configureDeposit(client);
+configureInventory(client);
+configureSendOffer(client);
+
 client.on('loggedOn', () => {
   console.log(`Conectado à Steam como ${client.steamID.getSteamID64()}.`);
   client.setPersona(SteamUser.EPersonaState.Online);
-  client.gamesPlayed('How may FructoseIQ help you today?');
+  client.gamesPlayed('🍷 How may FructoseIQ help you today? 🥑');
 });
 
-// TODO: Ciclo de mensagens no playing da Steam - Prioridade: Baixa
 client.on('friendRelationship',
   async (steamID, relationship, previousRelationship) => {
     try {
@@ -43,7 +52,11 @@ client.on('friendRelationship',
       ) {
         await client.chat.sendFriendMessage(
           steamID,
-          'Welcome! Do you know how to use this boat? Send !help for the full list of commands.'
+          quote([
+            '👋 Welcome aboard the FrostBoat! ⛵',
+            '🧭 Send !help to open the full command deck.',
+            '🛡️ Trade smart, stay safe, and keep it frosty.',
+          ]),
         );
 
         console.log(`Mensagem de boas-vindas enviada para ${steamID.getSteamID64()}`);
