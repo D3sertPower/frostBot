@@ -5,8 +5,8 @@ const GROUPS = new Map([])
 const GROUP_PERMISSIONS = new Map([])
 const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_INVENTORIES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUP"
 ]
-const groupData = fs.readFileSync('../groups.json', 'utf8');
-const permissionData = fs.readFileSync('../permissions.json', 'utf8')
+const groupData = fs.readFileSync('groups.json', 'utf8');
+const permissionData = fs.readFileSync('permissions.json', 'utf8')
 // Pull groups and users
 try {
 
@@ -34,7 +34,7 @@ try {
   console.error('Error:', error);
 }
 
-function hasPermission(steamID, permission) {
+function checkPermission(steamID, permission) {
   var userGroup = getGroup(steamID)
 
   if (PERMISSIONS.find(permission) == undefined) {
@@ -48,7 +48,7 @@ function hasPermission(steamID, permission) {
   return false
 }
 
-function setGroup(steamID, newUserGroup) {
+async function setGroup(steamID, newUserGroup) {
   try { 
   GROUPS.set(steamID, newUserGroup)
 
@@ -75,4 +75,4 @@ function getGroup(steamID) {
   return "USER"
 }
 
-module.exports = { hasPermission, setGroup, getGroup };
+module.exports = { checkPermission, setGroup, getGroup };
