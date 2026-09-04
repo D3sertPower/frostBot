@@ -58,8 +58,8 @@ async function setGroup(steamID, newUserGroup) {
   try { 
   GROUPS.set(steamID, newUserGroup)
 
-  var groupsDotJson = JSON.stringify(GROUPS, null, 2)
-  fs.writeFile('groups.json', groupsDotJson, 'utf8', (err) => {
+  var groupsDotJson = JSON.stringify(Object.fromEntries(GROUPS), null, 2)
+  await fs.promises.writeFile('groups.json', groupsDotJson, 'utf8', (err) => {
     if (err) throw err,
     console.log('Groups file updated.')
   });
