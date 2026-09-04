@@ -6,6 +6,7 @@ const { resolveFriendsByName } = require('../steam-friends')
 module.exports = {
   name: 'setgroup',
   aliases: ['addgroup','setargrupo','sg'],
+  args: ['[group]', '[name]'],
   description: 'Sets a group for an user.',
   async run() {
     // [0] -> COMMAND
@@ -29,12 +30,11 @@ module.exports = {
       'Try again.'
     ])
     }
-    if (candidates.length === 1) {
+    
     let targetSID64 = candidates[0].steamID64
     let targetName = candidates[0].name
-    }
     
-    if (!checkPermission(requesterSteamId, "SET_GROUP")) {
+    if (!checkPermission(requesterSteamId, "SET_GROUPS")) {
       return code([
         '🧨 What are you trying to do, kid?',
         'You are not allowed to use this command.'
@@ -51,7 +51,7 @@ module.exports = {
       ])      
       }
       return pre([
-        `✔ GRUPO DE ${targetName} atualizado com sucesso.`
+        `✅ GRUPO DE ${targetName} atualizado com sucesso.`
       ])
     } 
   }

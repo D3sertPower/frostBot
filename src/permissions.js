@@ -3,7 +3,7 @@
 const fs = require('fs')
 const GROUPS = new Map([])
 const GROUP_PERMISSIONS = new Map([])
-const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_INVENTORIES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUP"
+const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_INVENTORIES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUPS"
 ]
 const groupData = fs.readFileSync('groups.json', 'utf8');
 const permissionData = fs.readFileSync('permissions.json', 'utf8')
@@ -20,7 +20,7 @@ try {
   Object.entries(pData).forEach(([group, perms]) => {
     var valid_perms = []
     for (const perm of perms) {
-      if (PERMISSIONS.find(perm) != undefined) {
+      if (PERMISSIONS.includes(perm)) {
       valid_perms.push(perm)
       }
       else {
@@ -37,15 +37,11 @@ try {
 function checkPermission(steamID, permission) {
   var userGroup = getGroup(steamID)
 
-  if (PERMISSIONS.find(permission) == undefined) {
+  if (!PERMISSIONS.includes(permission)) {
     console.warn(`Permission ${permission}, is not a valid permission.`)
     return false
   }
-
-  if (GROUP_PERMISSIONS.get(userGroup).find(permission)) {
-    return true
-  }
-  return false
+  return GROUP_PERMISSIONS.get(userGroup).includes(permission)
 }
 
 async function setGroup(steamID, newUserGroup) {
