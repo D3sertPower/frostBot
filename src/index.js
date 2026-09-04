@@ -83,7 +83,7 @@ client.chat.on('friendMessage', async (incoming) => { // incoming é o evento
     friendId64,
   );
   // tentamos pegar a mensagem sem formatação se não for possível
-  // pegamos a imagem com formatação mesmo
+  // pegamos a mensagem com formatação mesmo
   if (!reply) {
     return;
   } 

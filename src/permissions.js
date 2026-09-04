@@ -1,0 +1,78 @@
+'use strict';
+
+const fs = require('fs')
+const GROUPS = new Map([])
+const GROUP_PERMISSIONS = new Map([])
+const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_INVENTORIES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUP"
+]
+const groupData = fs.readFileSync('../groups.json', 'utf8');
+const permissionData = fs.readFileSync('../permissions.json', 'utf8')
+// Pull groups and users
+try {
+
+  var pData = JSON.parse(permissionData)
+  var gData = JSON.parse(groupData);
+
+  Object.entries(gData).forEach(([steamID, group]) => {
+    GROUPS.set(steamID, group)
+  });
+
+  Object.entries(pData).forEach(([group, perms]) => {
+    var valid_perms = []
+    for (const perm of perms) {
+      if (PERMISSIONS.find(perm) != undefined) {
+      valid_perms.push(perm)
+      }
+      else {
+      console.warn(`Invalid permisison ${perm} in permissions.json!`)
+      }
+    }
+    GROUP_PERMISSIONS.set(group, valid_perms) 
+    });
+
+} catch (error) {
+  console.error('Error:', error);
+}
+
+function hasPermission(steamID, permission) {
+  var userGroup = getGroup(steamID)
+
+  if (PERMISSIONS.find(permission) == undefined) {
+    console.warn(`Permission ${permission}, is not a valid permission.`)
+    return false
+  }
+
+  if (GROUP_PERMISSIONS.get(userGroup).find(permission)) {
+    return true
+  }
+  return false
+}
+
+function setGroup(steamID, newUserGroup) {
+  try { 
+  GROUPS.set(steamID, newUserGroup)
+
+  var groupsDotJson = JSON.stringify(GROUPS, null, 2)
+  fs.writeFile('../groups.json', groupsDotJson, 'utf8', (err) => {
+    if (err) throw err,
+    console.log('Groups file updated.')
+  });
+
+  console.log(`Updated user ${steamID} group to ${newUserGroup}`)
+  }
+  catch(e) {
+  console.error('Erro:', e)
+  }
+}
+
+function getGroup(steamID) {
+  var userGroup = GROUPS.get(steamID)
+  if (userGroup != undefined) {
+    return userGroup
+  }
+  setGroup(steamID, "USER")
+  console.warn(`Auto-role system failed, setting ${steamID}'s group manually.`)
+  return "USER"
+}
+
+module.exports = { hasPermission, setGroup, getGroup };
