@@ -1,7 +1,7 @@
 'use strict';
 
 const { code, pre, quote } = require('../chat-format');
-const { setGroup, checkPermission } = require('../permissions')
+const { setGroup, checkPermission, accessDeniedMessage } = require('../permissions')
 const { resolveFriendsByName } = require('../steam-friends')
 module.exports = {
   name: 'setgroup',
@@ -35,10 +35,7 @@ module.exports = {
     let targetName = candidates[0].name
     
     if (!checkPermission(requesterSteamId, "SET_GROUPS")) {
-      return code([
-        '🧨 What are you trying to do, kid?',
-        'You are not allowed to use this command.'
-      ])
+      return accessDeniedMessage()
     }
     else {
       try {

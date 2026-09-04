@@ -5,6 +5,7 @@ const GROUPS = new Map([])
 const GROUP_PERMISSIONS = new Map([])
 const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_INVENTORIES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUPS"
 ]
+const { code } = require('./chat-format')
 const groupData = fs.readFileSync('groups.json', 'utf8');
 const permissionData = fs.readFileSync('permissions.json', 'utf8')
 // Pull groups and users
@@ -36,7 +37,9 @@ try {
 
 function checkPermission(steamID, permission) {
   var userGroup = getGroup(steamID)
-
+  if (permission === undefined) {
+    return true
+  }
   if (!PERMISSIONS.includes(permission)) {
     console.warn(`Permission ${permission}, is not a valid permission.`)
     return false
@@ -44,12 +47,19 @@ function checkPermission(steamID, permission) {
   return GROUP_PERMISSIONS.get(userGroup).includes(permission)
 }
 
+function accessDeniedMessage() {
+  return code([
+        '🧨 What are you trying to do, kid?',
+        'You are not allowed to use this command.'
+      ])
+}
+
 async function setGroup(steamID, newUserGroup) {
   try { 
   GROUPS.set(steamID, newUserGroup)
 
   var groupsDotJson = JSON.stringify(GROUPS, null, 2)
-  fs.writeFile('../groups.json', groupsDotJson, 'utf8', (err) => {
+  fs.writeFile('groups.json', groupsDotJson, 'utf8', (err) => {
     if (err) throw err,
     console.log('Groups file updated.')
   });
@@ -71,4 +81,4 @@ function getGroup(steamID) {
   return "USER"
 }
 
-module.exports = { checkPermission, setGroup, getGroup };
+module.exports = { checkPermission, setGroup, getGroup, accessDeniedMessage };
