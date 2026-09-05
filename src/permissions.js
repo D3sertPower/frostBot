@@ -3,7 +3,7 @@
 const fs = require('fs')
 const GROUPS = new Map([])
 const GROUP_PERMISSIONS = new Map([])
-const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_INVENTORIES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUPS"
+const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_TRADES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUPS"
 ]
 const { code } = require('./chat-format')
 const groupData = fs.readFileSync('groups.json', 'utf8');
@@ -44,7 +44,10 @@ function checkPermission(steamID, permission) {
     console.warn(`Permission ${permission}, is not a valid permission.`)
     return false
   }
+  if (userGroup != undefined) {
   return GROUP_PERMISSIONS.get(userGroup).includes(permission)
+  }
+  return false
 }
 
 function accessDeniedMessage() {

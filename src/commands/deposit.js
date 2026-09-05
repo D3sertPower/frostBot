@@ -1,5 +1,6 @@
 'use strict';
 
+const TradeOfferManager = require('steam-tradeoffer-manager');
 const { code, pre, quote } = require('../chat-format');
 const { addInventoryItem } = require('./inv');
 
@@ -32,22 +33,27 @@ const INVENTORIES = Object.freeze([
     ],
   }),
 ]);
-const INVENTORY_PAGE_SIZE = 2000;
-const MAX_INVENTORY_PAGES = 20;
 const SELECTION_TTL_MS = 5 * 60 * 1000;
-const STEAM_ID64_BASE = 76561197960265728n;
+const { ETradeOfferState } = TradeOfferManager;
+const CLOSED_OFFER_STATES = new Set([
+  ETradeOfferState.Countered,
+  ETradeOfferState.Expired,
+  ETradeOfferState.Canceled,
+  ETradeOfferState.Declined,
+  ETradeOfferState.InvalidItems,
+  ETradeOfferState.CanceledBySecondFactor,
+]);
 
 const pendingSelections = new Map();
 const pendingDeposits = new Map();
 
 let steamClient = null;
-let fetchImpl = globalThis.fetch;
-let webApiKey = null;
-let webSession = null;
+let tradeManager = null;
+let managerReady = false;
 let sessionListener = null;
 let disconnectedListener = null;
-let inventoryChangedListener = null;
-let reconcilePromise = null;
+let sentOfferChangedListener = null;
+let sessionExpiredListener = null;
 
 class DepositError extends Error {
   constructor(code, message) {
@@ -148,85 +154,72 @@ function configureSteamClient(client, options = {}) {
     throw new TypeError('A Steam client with event support is required.');
   }
 
-  if (options.fetchImpl !== undefined) {
-    if (typeof options.fetchImpl !== 'function') {
-      throw new TypeError('fetchImpl must be a function.');
-    }
-    fetchImpl = options.fetchImpl;
-  } else {
-    fetchImpl = globalThis.fetch;
-  }
-
-  webApiKey = options.webApiKey ?? process.env.STEAM_WEB_API_KEY ?? null;
-
   if (steamClient && typeof steamClient.removeListener === 'function') {
     steamClient.removeListener('webSession', sessionListener);
     steamClient.removeListener('disconnected', disconnectedListener);
-    steamClient.removeListener('newItems', inventoryChangedListener);
-    steamClient.removeListener('tradeOffers', inventoryChangedListener);
+  }
+  if (tradeManager && typeof tradeManager.removeListener === 'function') {
+    tradeManager.removeListener('sentOfferChanged', sentOfferChangedListener);
+    tradeManager.removeListener('sessionExpired', sessionExpiredListener);
   }
 
   steamClient = client;
-  webSession = null;
-  sessionListener = (sessionID, cookies) => {
-    webSession = {
-      sessionID,
-      cookies: Array.isArray(cookies) ? [...cookies] : [],
-    };
+  tradeManager = options.manager ?? new TradeOfferManager({
+    steam: client,
+    language: 'en',
+    dataDirectory: null,
+  });
+
+  if (
+    typeof tradeManager.setCookies !== 'function' ||
+    typeof tradeManager.getUserInventoryContents !== 'function' ||
+    typeof tradeManager.createOffer !== 'function' ||
+    typeof tradeManager.on !== 'function'
+  ) {
+    throw new TypeError('A compatible Steam trade-offer manager is required.');
+  }
+
+  managerReady = false;
+  sessionListener = (_sessionID, cookies) => {
+    managerReady = false;
+    tradeManager.setCookies(cookies, (error) => {
+      if (error) {
+        console.warn(`Could not initialize Steam trade offers: ${error.message}`);
+        return;
+      }
+      managerReady = true;
+    });
   };
   disconnectedListener = () => {
-    webSession = null;
+    managerReady = false;
   };
-  inventoryChangedListener = () => {
-    void reconcilePendingDeposits().catch((error) => {
-      console.warn(`Could not reconcile Steam deposits: ${error.message}`);
+  sentOfferChangedListener = (offer) => {
+    void handleSentOfferChanged(offer).catch((error) => {
+      console.warn(`Could not update Steam deposit #${offer?.id}: ${error.message}`);
     });
+  };
+  sessionExpiredListener = () => {
+    managerReady = false;
+    if (typeof steamClient.webLogOn === 'function') {
+      steamClient.webLogOn();
+    }
   };
 
   steamClient.on('webSession', sessionListener);
   steamClient.on('disconnected', disconnectedListener);
-  steamClient.on('newItems', inventoryChangedListener);
-  steamClient.on('tradeOffers', inventoryChangedListener);
+  tradeManager.on('sentOfferChanged', sentOfferChangedListener);
+  tradeManager.on('sessionExpired', sessionExpiredListener);
 }
 
-function requireWebSession() {
-  if (!steamClient || !webSession || typeof fetchImpl !== 'function') {
+function requireTradeManager() {
+  if (!steamClient || !tradeManager || !managerReady) {
     throw new DepositError(
       'WEB_SESSION_NOT_READY',
       'The Steam web session is not ready yet. Please try again shortly.',
     );
   }
 
-  return webSession;
-}
-
-function cookieHeader(session) {
-  return session.cookies
-    .map((cookie) => cookie.split(';', 1)[0])
-    .join('; ');
-}
-
-async function readJsonResponse(response, operation) {
-  let body;
-
-  try {
-    body = await response.json();
-  } catch {
-    throw new DepositError(
-      'INVALID_STEAM_RESPONSE',
-      `Steam returned an invalid response while ${operation}.`,
-    );
-  }
-
-  if (!response.ok) {
-    const detail = body?.strError || body?.error || `HTTP ${response.status}`;
-    throw new DepositError(
-      'STEAM_REQUEST_FAILED',
-      `Steam rejected the request while ${operation}: ${detail}`,
-    );
-  }
-
-  return body;
+  return tradeManager;
 }
 
 async function notifyDepositOwner(steamID64, message) {
@@ -241,84 +234,47 @@ async function notifyDepositOwner(steamID64, message) {
   }
 }
 
-async function readTradeOfferState(tradeOfferID) {
-  const url = new URL(
-    'https://api.steampowered.com/IEconService/GetTradeOffer/v1/',
-  );
-  url.searchParams.set('key', webApiKey);
-  url.searchParams.set('tradeofferid', tradeOfferID);
-  url.searchParams.set('language', 'english');
-
-  const response = await fetchImpl(url, {
-    headers: { Accept: 'application/json' },
-  });
-  const body = await readJsonResponse(response, 'checking a deposit offer');
-  return Number(body.response?.offer?.trade_offer_state ?? 0);
-}
-
-async function reconcilePendingDeposits() {
-  if (!webApiKey || pendingDeposits.size === 0) {
-    return { checked: 0, credited: 0 };
+async function handleSentOfferChanged(offer) {
+  const deposit = pendingDeposits.get(String(offer?.id ?? ''));
+  if (!deposit || deposit.status !== 'pending') {
+    return false;
   }
 
-  if (reconcilePromise) {
-    return reconcilePromise;
-  }
-
-  reconcilePromise = (async () => {
-    let checked = 0;
-    let credited = 0;
-    const terminalFailureStates = new Set([4, 5, 6, 7, 8, 10]);
-
-    for (const deposit of pendingDeposits.values()) {
-      if (deposit.status !== 'pending') {
-        continue;
-      }
-
-      const state = await readTradeOfferState(deposit.tradeOfferID);
-      checked += 1;
-
-      if (state === 3) {
-        for (let index = 0; index < deposit.quantity; index += 1) {
-          addInventoryItem(deposit.steamID64, deposit.itemName);
-        }
-
-        deposit.status = 'credited';
-        deposit.creditedAt = new Date();
-        credited += 1;
-        await notifyDepositOwner(
-          deposit.steamID64,
-          pre([
-            '✅ DEPOSIT ACCEPTED AND CREDITED ❄️',
-            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-            `📦 Added: ${deposit.quantity} x ${deposit.itemName}`,
-            '🎒 Added to your internal inventory.',
-            `🧾 Steam offer: #${deposit.tradeOfferID}`,
-            '🚀 The item is now available through !sendoffer.',
-          ]),
-        );
-      } else if (terminalFailureStates.has(state)) {
-        deposit.status = 'closed';
-        deposit.closedAt = new Date();
-        await notifyDepositOwner(
-          deposit.steamID64,
-          quote([
-            '❌ Your Steam deposit offer closed without being credited.',
-            `🧾 Steam offer: #${deposit.tradeOfferID}`,
-            '🔒 No item was added to the internal inventory.',
-          ]),
-        );
-      }
+  if (offer.state === ETradeOfferState.Accepted) {
+    for (let index = 0; index < deposit.quantity; index += 1) {
+      addInventoryItem(deposit.steamID64, deposit.itemName);
     }
 
-    return { checked, credited };
-  })();
-
-  try {
-    return await reconcilePromise;
-  } finally {
-    reconcilePromise = null;
+    deposit.status = 'credited';
+    deposit.creditedAt = new Date();
+    await notifyDepositOwner(
+      deposit.steamID64,
+      pre([
+        '✅ DEPOSIT ACCEPTED AND CREDITED ❄️',
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        `📦 Added: ${deposit.quantity} x ${deposit.itemName}`,
+        '🎒 Added to your internal inventory.',
+        `🧾 Steam offer: #${deposit.tradeOfferID}`,
+        '🚀 The item is now available through !sendoffer.',
+      ]),
+    );
+    return true;
   }
+
+  if (CLOSED_OFFER_STATES.has(offer.state)) {
+    deposit.status = 'closed';
+    deposit.closedAt = new Date();
+    await notifyDepositOwner(
+      deposit.steamID64,
+      quote([
+        '❌ Your Steam deposit offer closed without being credited.',
+        `🧾 Steam offer: #${deposit.tradeOfferID}`,
+        '🔒 No item was added to the internal inventory.',
+      ]),
+    );
+  }
+
+  return false;
 }
 
 function trackPendingDeposit(steamID64, group, quantity, inventoryType, offer) {
@@ -334,88 +290,39 @@ function trackPendingDeposit(steamID64, group, quantity, inventoryType, offer) {
 }
 
 async function fetchInventory(steamID64, inventoryType) {
-  const session = requireWebSession();
-  const assets = [];
-  const descriptions = new Map();
-  let startAssetID = null;
+  const manager = requireTradeManager();
 
-  for (let page = 0; page < MAX_INVENTORY_PAGES; page += 1) {
-    const url = new URL(
-      `https://steamcommunity.com/inventory/${steamID64}/${inventoryType.appid}/${inventoryType.contextid}`,
-    );
-    url.searchParams.set('l', 'english');
-    url.searchParams.set('count', String(INVENTORY_PAGE_SIZE));
-    if (startAssetID) {
-      url.searchParams.set('start_assetid', startAssetID);
-    }
+  return new Promise((resolve, reject) => {
+    manager.getUserInventoryContents(
+      steamID64,
+      inventoryType.appid,
+      inventoryType.contextid,
+      true,
+      (error, inventory = []) => {
+        if (error) {
+          reject(new DepositError(
+            'INVENTORY_UNAVAILABLE',
+            `Steam could not read your ${inventoryType.label} inventory: ${error.message}`,
+          ));
+          return;
+        }
 
-    const response = await fetchImpl(url, {
-      headers: {
-        Accept: 'application/json',
-        Cookie: cookieHeader(session),
+        resolve(inventory.flatMap((item) => {
+          const name = item.market_hash_name || item.name;
+          if (!name) {
+            return [];
+          }
+
+          return [{
+            appid: Number(item.appid ?? inventoryType.appid),
+            contextid: String(item.contextid ?? inventoryType.contextid),
+            assetid: String(item.assetid ?? item.id),
+            amount: Math.max(1, Number(item.amount) || 1),
+            name,
+          }];
+        }));
       },
-    });
-    const body = await readJsonResponse(
-      response,
-      `reading your ${inventoryType.label} inventory`,
     );
-
-    if (body.success !== 1 && body.success !== true) {
-      throw new DepositError(
-        'INVENTORY_UNAVAILABLE',
-        `Steam could not read your ${inventoryType.label} inventory. Make sure the bot can view it and try again.`,
-      );
-    }
-
-    assets.push(...(body.assets ?? []));
-    for (const description of body.descriptions ?? []) {
-      descriptions.set(
-        `${description.classid}_${description.instanceid ?? '0'}`,
-        description,
-      );
-    }
-
-    if (!body.more_items) {
-      break;
-    }
-
-    const nextAssetID = String(body.last_assetid ?? '');
-    if (!nextAssetID || nextAssetID === startAssetID) {
-      throw new DepositError(
-        'INVENTORY_PAGINATION_FAILED',
-        'Steam returned an incomplete inventory. Please try again.',
-      );
-    }
-    startAssetID = nextAssetID;
-
-    if (page === MAX_INVENTORY_PAGES - 1) {
-      throw new DepositError(
-        'INVENTORY_TOO_LARGE',
-        `The ${inventoryType.label} inventory is too large to process safely.`,
-      );
-    }
-  }
-
-  return assets.flatMap((asset) => {
-    const description = descriptions.get(
-      `${asset.classid}_${asset.instanceid ?? '0'}`,
-    );
-
-    const name = description?.market_hash_name || description?.name;
-    if (
-      !name ||
-      (description.tradable !== 1 && description.tradable !== true)
-    ) {
-      return [];
-    }
-
-    return [{
-      appid: Number(asset.appid ?? inventoryType.appid),
-      contextid: String(asset.contextid ?? inventoryType.contextid),
-      assetid: String(asset.assetid),
-      amount: Math.max(1, Number(asset.amount) || 1),
-      name,
-    }];
   });
 }
 
@@ -474,63 +381,44 @@ function chooseAssets(group, quantity) {
   return chosen;
 }
 
-function accountIDFromSteamID64(steamID64) {
-  try {
-    const accountID = BigInt(steamID64) - STEAM_ID64_BASE;
-    return accountID >= 0n ? accountID.toString() : String(steamID64);
-  } catch {
-    return String(steamID64);
-  }
-}
-
 async function sendDepositOffer(steamID64, group, quantity, inventoryType) {
-  const session = requireWebSession();
+  const manager = requireTradeManager();
   const requestedAssets = chooseAssets(group, quantity);
-  const partnerAccountID = accountIDFromSteamID64(steamID64);
-  const tradeOffer = {
-    newversion: true,
-    version: requestedAssets.length + 1,
-    me: { assets: [], currency: [], ready: false },
-    them: { assets: requestedAssets, currency: [], ready: false },
-  };
-  const form = new URLSearchParams({
-    sessionid: session.sessionID,
-    serverid: '1',
-    partner: String(steamID64),
-    tradeoffermessage: `❄️ FrostBot deposit • ${inventoryType.label} • ${quantity} x ${group.name}`,
-    json_tradeoffer: JSON.stringify(tradeOffer),
-    captcha: '',
-    trade_offer_create_params: '{}',
-  });
 
-  const response = await fetchImpl(
-    'https://steamcommunity.com/tradeoffer/new/send',
-    {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        Cookie: cookieHeader(session),
-        Origin: 'https://steamcommunity.com',
-        Referer: `https://steamcommunity.com/tradeoffer/new/?partner=${partnerAccountID}`,
-      },
-      body: form,
-    },
-  );
-  const body = await readJsonResponse(response, 'sending the trade offer');
-
-  if (!body.tradeofferid) {
+  let offer;
+  try {
+    offer = manager.createOffer(steamID64);
+    const addedCount = offer.addTheirItems(requestedAssets);
+    if (addedCount !== requestedAssets.length) {
+      throw new Error('Some requested assets could not be added to the offer.');
+    }
+    offer.setMessage(
+      `❄️ FrostBot deposit • ${inventoryType.label} • ${quantity} x ${group.name}`,
+    );
+  } catch (error) {
     throw new DepositError(
-      'TRADE_OFFER_REJECTED',
-      `Steam did not create the trade offer${body.strError ? `: ${body.strError}` : '.'}`,
+      'TRADE_OFFER_INVALID',
+      `The Steam trade offer could not be prepared: ${error.message}`,
     );
   }
 
+  const status = await new Promise((resolve, reject) => {
+    offer.send((error, result) => {
+      if (error) {
+        reject(new DepositError(
+          'TRADE_OFFER_REJECTED',
+          `Steam did not create the trade offer: ${error.message}`,
+        ));
+        return;
+      }
+      resolve(result);
+    });
+  });
+
   return {
-    id: String(body.tradeofferid),
-    needsConfirmation: Boolean(
-      body.needs_mobile_confirmation || body.needs_email_confirmation,
-    ),
+    id: String(offer.id),
+    needsConfirmation: status === 'pending' ||
+      offer.state === ETradeOfferState.CreatedNeedsConfirmation,
   };
 }
 
@@ -615,13 +503,6 @@ async function depositFromInventory(
   quantity,
   inventoryType,
 ) {
-  if (!webApiKey) {
-    throw new DepositError(
-      'DEPOSIT_TRACKING_UNAVAILABLE',
-      'Deposit tracking is not configured. The bot operator must set STEAM_WEB_API_KEY.',
-    );
-  }
-
   const inventory = await fetchInventory(steamID64, inventoryType);
 
   if (inventory.length === 0) {
@@ -819,7 +700,7 @@ module.exports = {
     parseRequest,
     pendingDeposits,
     pendingSelections,
-    reconcilePendingDeposits,
+    handleSentOfferChanged,
     resolveInventoryChoice,
   },
 };
