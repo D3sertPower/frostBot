@@ -1,0 +1,6 @@
+{
+    "DONO": ["SET_GROUPS", "MANAGE_TRADES"],
+    "ADMIN": [],
+    "VIP": [],
+    "USER": []
+}
