@@ -3,11 +3,11 @@
 const fs = require('fs')
 const GROUPS = new Map([])
 const GROUP_PERMISSIONS = new Map([])
-const PERMISSIONS = ["WITHDRAW_ANYTHING", "NO_COOLDOWNS", "MANAGE_TRADES", "SEE_STATISTICS", "SEE_REPORTS", "SET_GROUPS"
+const PERMISSIONS = ["NO_COOLDOWNS", "MANAGE_TRADES", "SEE_STATISTICS", "SET_GROUPS"
 ]
 const { code } = require('./chat-format')
-const groupData = fs.readFileSync('groups.json', 'utf8');
-const permissionData = fs.readFileSync('permissions.json', 'utf8')
+const groupData = fs.readFileSync('./data/groups.json', 'utf8');
+const permissionData = fs.readFileSync('./data/permissions.json', 'utf8')
 // Pull groups and users
 try {
 
@@ -62,7 +62,7 @@ async function setGroup(steamID, newUserGroup) {
   GROUPS.set(steamID, newUserGroup)
 
   var groupsDotJson = JSON.stringify(Object.fromEntries(GROUPS), null, 2)
-  await fs.promises.writeFile('groups.json', groupsDotJson, 'utf8', (err) => {
+  await fs.promises.writeFile('./data/groups.json', groupsDotJson, 'utf8', (err) => {
     if (err) throw err,
     console.log('Groups file updated.')
   });

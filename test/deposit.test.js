@@ -7,63 +7,104 @@ const { getReply } = require('../src/message-handler');
 const deposit = require('../src/commands/deposit');
 const { getInventory, setInventory } = require('../src/commands/inv');
 
-function jsonResponse(body, status = 200) {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    async json() {
-      return body;
-    },
-  };
+function inventoryItems(items, appid = 440, contextid = '2') {
+  return items.map((item, index) => ({
+    appid,
+    contextid,
+    assetid: String(1000 + index),
+    amount: item.amount ?? 1,
+    market_hash_name: item.name,
+    tradable: item.tradable ?? true,
+  }));
 }
 
-function inventoryResponse(items, appid = 440, contextid = '2') {
-  return {
-    success: 1,
-    assets: items.map((item, index) => ({
+class FakeOffer {
+  constructor(manager, partner) {
+    this.manager = manager;
+    this.partner = String(partner);
+    this.id = null;
+    this.state = 1;
+    this.itemsToReceive = [];
+    this.message = '';
+  }
+
+  addTheirItems(items) {
+    this.itemsToReceive.push(...items);
+    return items.length;
+  }
+
+  setMessage(message) {
+    this.message = message;
+  }
+
+  send(callback) {
+    this.id = this.manager.nextOfferID;
+    this.state = this.manager.sendStatus === 'pending' ? 9 : 2;
+    this.manager.sentOffers.push(this);
+    callback(null, this.manager.sendStatus);
+  }
+}
+
+class FakeTradeManager extends EventEmitter {
+  constructor({ inventory = [], offerID = '987654321', sendStatus = 'sent' } = {}) {
+    super();
+    this.inventory = inventory;
+    this.nextOfferID = offerID;
+    this.sendStatus = sendStatus;
+    this.inventoryReads = [];
+    this.createdOffers = [];
+    this.sentOffers = [];
+    this.cookies = [];
+  }
+
+  setCookies(cookies, callback) {
+    this.cookies = [...cookies];
+    callback(null);
+  }
+
+  getUserInventoryContents(steamID64, appid, contextid, tradableOnly, callback) {
+    this.inventoryReads.push({
+      steamID64: String(steamID64),
       appid,
-      contextid,
-      assetid: String(1000 + index),
-      classid: String(2000 + index),
-      instanceid: '0',
-      amount: String(item.amount ?? 1),
-    })),
-    descriptions: items.map((item, index) => ({
-      classid: String(2000 + index),
-      instanceid: '0',
-      market_hash_name: item.name,
-      tradable: item.tradable ?? 1,
-    })),
-    more_items: 0,
-  };
+      contextid: String(contextid),
+      tradableOnly,
+    });
+    callback(null, this.inventory.filter((item) => !tradableOnly || item.tradable));
+  }
+
+  createOffer(partner) {
+    const offer = new FakeOffer(this, partner);
+    this.createdOffers.push(offer);
+    return offer;
+  }
 }
 
-function configureMockSteam(fetchMock) {
+function configureMockSteam(options = {}) {
   const client = new EventEmitter();
-  deposit.configureSteamClient(client, {
-    fetchImpl: fetchMock,
-    webApiKey: 'test-web-api-key',
-  });
+  if (options.notifications) {
+    client.chat = {
+      async sendFriendMessage(recipient, message) {
+        options.notifications.push({ recipient: String(recipient), message });
+      },
+    };
+  }
+
+  const manager = new FakeTradeManager(options);
+  deposit.configureSteamClient(client, { manager });
   client.emit('webSession', 'session-123', [
     'sessionid=session-123; Path=/',
     'steamLoginSecure=secret; Path=/',
   ]);
+  return { client, manager };
 }
 
-test('deposit sends an offer after inventory selection for one partial-name match', async () => {
-  const calls = [];
-  configureMockSteam(async (url, options = {}) => {
-    calls.push({ url: String(url), options });
-
-    if (String(url).includes('/inventory/')) {
-      return jsonResponse(inventoryResponse([
-        { name: 'Mann Co. Supply Crate Key' },
-        { name: 'Mann Co. Supply Crate Key' },
-        { name: 'Refined Metal' },
-      ]));
-    }
-
-    return jsonResponse({ tradeofferid: '987654321' });
+test('deposit sends a manager offer after inventory selection for one partial-name match', async () => {
+  const { manager } = configureMockSteam({
+    inventory: inventoryItems([
+      { name: 'Mann Co. Supply Crate Key' },
+      { name: 'Mann Co. Supply Crate Key' },
+      { name: 'Refined Metal' },
+    ]),
   });
 
   const inventoryQuestion = await getReply(
@@ -71,83 +112,74 @@ test('deposit sends an offer after inventory selection for one partial-name matc
     '76561198874586215',
   );
 
-  assert.match(inventoryQuestion, /^\/pre 🧭/);
+  assert.match(inventoryQuestion, /^\/pre /);
   assert.match(inventoryQuestion, /Which inventory should I use/i);
   assert.match(inventoryQuestion, /Steam Community/);
   assert.match(inventoryQuestion, /Team Fortress 2/);
   assert.match(inventoryQuestion, /Counter-Strike 2/);
-  assert.equal(calls.length, 0, 'no inventory is requested before selection');
+  assert.equal(manager.inventoryReads.length, 0);
 
   const invalidChoice = await getReply('something else', '76561198874586215');
   assert.match(invalidChoice, /did not recognize that inventory/i);
-  assert.equal(calls.length, 0, 'an invalid selection must not request inventory');
+  assert.equal(manager.inventoryReads.length, 0);
 
   const reply = await getReply('tf2', '76561198874586215');
 
-  assert.match(reply, /^\/pre ✅ DEPOSIT OFFER SENT/);
+  assert.match(reply, /DEPOSIT OFFER SENT/);
   assert.match(reply, /Trade offer: #987654321/i);
   assert.match(reply, /2 x Mann Co\. Supply Crate Key/);
   assert.match(reply, /Inventory: Team Fortress 2/);
-  assert.equal(calls.length, 2);
-  assert.match(calls[0].url, /\/inventory\/76561198874586215\/440\/2/);
+  assert.deepEqual(manager.inventoryReads, [{
+    steamID64: '76561198874586215',
+    appid: 440,
+    contextid: '2',
+    tradableOnly: true,
+  }]);
 
-  const form = calls[1].options.body;
-  const offer = JSON.parse(form.get('json_tradeoffer'));
-  assert.equal(form.get('partner'), '76561198874586215');
-  assert.deepEqual(offer.me.assets, []);
+  const [offer] = manager.sentOffers;
+  assert.equal(offer.partner, '76561198874586215');
   assert.deepEqual(
-    offer.them.assets.map((asset) => asset.assetid),
+    offer.itemsToReceive.map((asset) => asset.assetid),
     ['1000', '1001'],
   );
+  assert.match(offer.message, /FrostBot deposit/);
 });
 
 test('deposit waits for an index when partial text matches multiple item types', async () => {
-  const calls = [];
-  configureMockSteam(async (url, options = {}) => {
-    calls.push({ url: String(url), options });
-
-    if (String(url).includes('/inventory/')) {
-      return jsonResponse(inventoryResponse([
-        { name: 'Mann Co. Supply Crate Key' },
-        { name: 'Mann Co. Supply Crate Series #30' },
-      ]));
-    }
-
-    return jsonResponse({ tradeofferid: '123456789' });
+  const { manager } = configureMockSteam({
+    offerID: '123456789',
+    inventory: inventoryItems([
+      { name: 'Mann Co. Supply Crate Key' },
+      { name: 'Mann Co. Supply Crate Series #30' },
+    ]),
   });
 
   const steamID64 = '76561198874586216';
   const inventoryQuestion = await getReply('!deposit mann co. supp', steamID64);
   assert.match(inventoryQuestion, /Which inventory should I use/i);
-  assert.equal(calls.length, 0);
+  assert.equal(manager.inventoryReads.length, 0);
 
   const question = await getReply('2', steamID64);
 
   assert.match(question, /more than one matching item/i);
-  assert.match(question, /1\. 📦 Mann Co\. Supply Crate Key/);
-  assert.match(question, /2\. 📦 Mann Co\. Supply Crate Series #30/);
-  assert.equal(calls.length, 1, 'an ambiguous command must not send an offer');
+  assert.match(question, /1\..*Mann Co\. Supply Crate Key/);
+  assert.match(question, /2\..*Mann Co\. Supply Crate Series #30/);
+  assert.equal(manager.sentOffers.length, 0);
 
   const reply = await getReply('2', steamID64);
 
   assert.match(reply, /Trade offer: #123456789/i);
   assert.match(reply, /Mann Co\. Supply Crate Series #30/);
-  assert.equal(calls.length, 2);
+  assert.equal(manager.sentOffers.length, 1);
 });
 
 test('deposit accepts more item-name text to resolve a pending match', async () => {
-  const calls = [];
-  configureMockSteam(async (url, options = {}) => {
-    calls.push({ url: String(url), options });
-
-    if (String(url).includes('/inventory/')) {
-      return jsonResponse(inventoryResponse([
-        { name: 'Mann Co. Supply Crate Key' },
-        { name: 'Mann Co. Supply Crate Series #30' },
-      ]));
-    }
-
-    return jsonResponse({ tradeofferid: '246813579' });
+  const { manager } = configureMockSteam({
+    offerID: '246813579',
+    inventory: inventoryItems([
+      { name: 'Mann Co. Supply Crate Key' },
+      { name: 'Mann Co. Supply Crate Series #30' },
+    ]),
   });
 
   const steamID64 = '76561198874586218';
@@ -157,24 +189,21 @@ test('deposit accepts more item-name text to resolve a pending match', async () 
 
   assert.match(reply, /Trade offer: #246813579/i);
   assert.match(reply, /Mann Co\. Supply Crate Key/);
-  assert.equal(calls.length, 2);
+  assert.equal(manager.sentOffers.length, 1);
 });
 
-test('deposit validates quantities before calling Steam', async () => {
-  let called = false;
-  configureMockSteam(async () => {
-    called = true;
-    throw new Error('should not be called');
-  });
+test('deposit validates quantities before calling the manager', async () => {
+  const { manager } = configureMockSteam();
 
   const reply = await getReply(
     '!deposit 0 Mann Co. Supply Crate Key',
     '76561198874586217',
   );
 
-  assert.match(reply, /^\/quote ❌/);
+  assert.match(reply, /DEPOSIT COULD NOT BE COMPLETED/);
   assert.match(reply, /Quantity must be a positive whole number/);
-  assert.equal(called, false);
+  assert.equal(manager.inventoryReads.length, 0);
+  assert.equal(manager.createdOffers.length, 0);
 });
 
 for (const scenario of [
@@ -194,75 +223,49 @@ for (const scenario of [
   },
 ]) {
   test(`deposit reads only the selected ${scenario.choice} inventory`, async () => {
-    const calls = [];
-    configureMockSteam(async (url, options = {}) => {
-      calls.push({ url: String(url), options });
-
-      if (String(url).includes('/inventory/')) {
-        return jsonResponse(inventoryResponse(
-          [{ name: scenario.item }],
-          scenario.appid,
-          scenario.contextid,
-        ));
-      }
-
-      return jsonResponse({ tradeofferid: `${scenario.appid}123` });
+    const { manager } = configureMockSteam({
+      offerID: `${scenario.appid}123`,
+      inventory: inventoryItems(
+        [{ name: scenario.item }],
+        scenario.appid,
+        scenario.contextid,
+      ),
     });
 
     await getReply(`!deposit ${scenario.item}`, scenario.steamID64);
-    assert.equal(calls.length, 0);
+    assert.equal(manager.inventoryReads.length, 0);
 
     const reply = await getReply(scenario.choice, scenario.steamID64);
 
     assert.match(reply, new RegExp(`Trade offer: #${scenario.appid}123`, 'i'));
-    assert.match(
-      calls[0].url,
-      new RegExp(`/inventory/${scenario.steamID64}/${scenario.appid}/${scenario.contextid}`),
+    assert.deepEqual(manager.inventoryReads[0], {
+      steamID64: scenario.steamID64,
+      appid: scenario.appid,
+      contextid: scenario.contextid,
+      tradableOnly: true,
+    });
+    assert.equal(manager.sentOffers[0].itemsToReceive[0].appid, scenario.appid);
+    assert.equal(
+      manager.sentOffers[0].itemsToReceive[0].contextid,
+      scenario.contextid,
     );
-
-    const offer = JSON.parse(calls[1].options.body.get('json_tradeoffer'));
-    assert.equal(offer.them.assets[0].appid, scenario.appid);
-    assert.equal(offer.them.assets[0].contextid, scenario.contextid);
   });
 }
 
-test('accepted Steam deposits are credited once to the internal inventory', async () => {
+test('manager acceptance events credit Steam deposits exactly once', async () => {
   const steamID64 = '76561198874586221';
   const notifications = [];
-  const client = new EventEmitter();
-  client.chat = {
-    async sendFriendMessage(recipient, message) {
-      notifications.push({ recipient: String(recipient), message });
-    },
-  };
-
   deposit._test.pendingDeposits.clear();
   setInventory(steamID64, []);
-  deposit.configureSteamClient(client, {
-    webApiKey: 'test-web-api-key',
-    fetchImpl: async (url) => {
-      const requestedURL = String(url);
 
-      if (requestedURL.includes('api.steampowered.com')) {
-        return jsonResponse({
-          response: { offer: { trade_offer_state: 3 } },
-        });
-      }
-
-      if (requestedURL.includes('/inventory/')) {
-        return jsonResponse(inventoryResponse([
-          { name: 'Mann Co. Supply Crate Key' },
-          { name: 'Mann Co. Supply Crate Key' },
-        ]));
-      }
-
-      return jsonResponse({ tradeofferid: '555000111' });
-    },
+  const { manager } = configureMockSteam({
+    offerID: '555000111',
+    notifications,
+    inventory: inventoryItems([
+      { name: 'Mann Co. Supply Crate Key' },
+      { name: 'Mann Co. Supply Crate Key' },
+    ]),
   });
-  client.emit('webSession', 'session-123', [
-    'sessionid=session-123; Path=/',
-    'steamLoginSecure=secret; Path=/',
-  ]);
 
   await getReply('!deposit 2 Mann Co. Supply Crate Key', steamID64);
   await getReply('tf2', steamID64);
@@ -270,15 +273,16 @@ test('accepted Steam deposits are credited once to the internal inventory', asyn
   assert.deepEqual(getInventory(steamID64), []);
   assert.equal(deposit._test.pendingDeposits.get('555000111').status, 'pending');
 
-  const firstCheck = await deposit._test.reconcilePendingDeposits();
-  const secondCheck = await deposit._test.reconcilePendingDeposits();
+  manager.emit('sentOfferChanged', { id: '555000111', state: 3 }, 2);
+  await new Promise((resolve) => setImmediate(resolve));
+  manager.emit('sentOfferChanged', { id: '555000111', state: 3 }, 3);
+  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(firstCheck, { checked: 1, credited: 1 });
-  assert.deepEqual(secondCheck, { checked: 0, credited: 0 });
   assert.deepEqual(getInventory(steamID64), [
     'Mann Co. Supply Crate Key',
     'Mann Co. Supply Crate Key',
   ]);
   assert.equal(deposit._test.pendingDeposits.get('555000111').status, 'credited');
+  assert.equal(notifications.length, 1);
   assert.match(notifications[0].message, /DEPOSIT ACCEPTED AND CREDITED/);
 });

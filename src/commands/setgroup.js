@@ -8,6 +8,7 @@ module.exports = {
   aliases: ['addgroup','setargrupo','sg'],
   args: ['[group]', '[name]'],
   description: 'Sets a group for an user.',
+  perms: ['SET_GROUPS'],
   async run() {
     // [0] -> COMMAND
     // [1] -> ARGS[0] -> GROUP
@@ -39,7 +40,7 @@ module.exports = {
     }
     else {
       try {
-      await setGroup(targetSID64, args[1])  
+      await setGroup(targetSID64, args[1].toUpperCase())  
       }
       catch(e) {
       return code([

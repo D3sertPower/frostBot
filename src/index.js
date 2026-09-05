@@ -4,8 +4,13 @@ require('dotenv').config({ quiet: true });
 
 const path = require('node:path');
 const SteamUser = require('steam-user');
+const TradeOfferManager = require('steam-tradeoffer-manager')
+
 const { quote } = require('./chat-format');
 const { getReply, COMMANDS } = require('./message-handler');
+const { MANAGER_MODE_USERS } = require('./commands/manage')
+const { addInventoryItem } = require('./commands/inv')
+
 const {
   configureSteamClient: configureInventory,
   updateInventory,
@@ -24,6 +29,54 @@ if (!STEAM_ACCOUNT_NAME || !STEAM_PASSWORD) {
 const client = new SteamUser({
   autoRelogin: true,
   dataDirectory: path.join(__dirname, '..', 'data'),
+});
+
+const manager = new TradeOfferManager({
+  steam: client,
+  pollInterval: -1
+});
+
+client.on('tradeRequest', async (steamID) => {
+  await client.chat.sendFriendMessage(
+          steamID,
+          quote([
+            '✨ I have received your trade offer!'
+          ]),
+        );
+  if (MANAGER_MODE_USERS.includes(steamID)) {
+    await client.chat.sendFriendMessage(
+          steamID,
+          pre([
+            '🔧 I have accepted your trade offer, manager.',
+            '📰 Reminder: No items are stored in your deposit.'
+          ]),
+        );
+    respond(true)
+  }
+  else {
+  manager.doPoll()
+  }
+});
+
+manager.on('newOffer', (offer) => {
+  console.log(`Received offer #${offer.id} from ${offer.partner.getSteamID64()}`);
+
+  if (offer.itemsToGive.length === 0) {
+    console.log(`Offer #${offer.id} requests 0 items from us. Accepting...`);
+    var items = offer.itemsToReceive
+    offer.accept((err, status) => {
+      if (err) {
+        console.error(`Failed to accept offer #${offer.id}:`, err);
+        return;
+      }
+      for (var item of items) {
+      addInventoryItem(offer.partner.getSteamID64(), item)
+      }
+      console.log(`Offer #${offer.id} successfully accepted! Status: ${status}`);
+    });
+  } else {
+    console.log(`Offer #${offer.id} asks for ${offer.itemsToGive.length} items. Ignoring.`);
+  }
 });
 
 configureDeposit(client);
