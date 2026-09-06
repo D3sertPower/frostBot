@@ -79,7 +79,7 @@ manager.on('newOffer', (offer) => {
   }
 });
 
-configureDeposit(client);
+configureDeposit(client, { manager });
 configureInventory(client);
 configureSendOffer(client);
 
