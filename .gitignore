@@ -3,5 +3,6 @@ node_modules/
 data/machine*
 data/cell*
 data/pay*
+data/api*
+data/groups*
 npm-debug.log*
-
